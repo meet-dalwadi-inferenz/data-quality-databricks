@@ -1,0 +1,5 @@
+streamlit==1.52.0
+databricks-sdk
+databricks-sql-connector
+pandas
+streamlit-aggrid
