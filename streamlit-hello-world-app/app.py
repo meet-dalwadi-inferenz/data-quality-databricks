@@ -7,11 +7,6 @@ from db import get_catalogs, get_schemas, get_tables, preview_table, get_columns
 from rules import load_rules_for_selected_table
 from helper_functions import list_to_string, string_to_list, normalize_allowed, reorder_rule_columns, unified_column
 
-
-#FALSI 
-
-# cfg = Config()  # Set the DATABRICKS_HOST environment variable when running locally
-
 st.set_page_config(layout="wide")
 st.title("SELECT CATALOG, SCHEMA, TABLE")
 
@@ -96,20 +91,15 @@ if st.button("Submit"):
 # SAFELY get rules_df from session state
 rules_df = st.session_state.get("rules_df", None)
 
-rules_df = st.session_state.get("rules_df", None)
 
 if rules_df is None:
     st.info("Please choose a catalog, schema, table and click Submit to load rules.")
 else:
     st.subheader("Applied Rules on the selected table")
 
-    # DEBUG: show last few rows before applying pending rule
-    # st.write("DEBUG: rules_df BEFORE pending:", rules_df.tail())
-
     # Apply pending new rule (if any)
     pending = st.session_state.get("pending_new_rule", None)
     if pending is not None:
-        # st.write("DEBUG: Applying pending_new_rule:", pending)
         pending_df = pd.DataFrame([pending])
         rules_df = pd.concat([rules_df, pending_df], ignore_index=True)
         st.session_state.rules_df = rules_df
@@ -128,7 +118,6 @@ else:
     if "columns" in st_aggrid_rules_df.columns:
         st_aggrid_rules_df["columns"] = st_aggrid_rules_df["columns"].apply(list_to_string)
 
-    st.write("DEBUG: rules_df AFTER reorder_rule_columns:", rules_df.tail())
 
     is_editable_allowed = JsCode(
         """
@@ -239,8 +228,6 @@ else:
         if col in st_aggrid_rules_df.columns:
             gb.configure_column(col, **params)
     
-    st.write("DEBUG: rules_df AFTER column_configs_items:", rules_df.tail())
-
     grid_options = gb.build()
 
     custom_theme = (
