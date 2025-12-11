@@ -7,6 +7,9 @@ from db import get_catalogs, get_schemas, get_tables, preview_table, get_columns
 from rules import load_rules_for_selected_table
 from helper_functions import list_to_string, string_to_list, normalize_allowed, reorder_rule_columns, unified_column
 
+
+#FALSI 
+
 # cfg = Config()  # Set the DATABRICKS_HOST environment variable when running locally
 
 st.set_page_config(layout="wide")
