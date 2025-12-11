@@ -50,7 +50,12 @@ table_placeholder = "select table"
 tables = [table_placeholder] + tables
 selected_table = st.selectbox("table", tables, index=0)
 
-st.write(f"selected catalog: {selected_catalog}, schema: {selected_schema}, table: {selected_table}")
+column_placeholder = "select column"
+columns = get_columns_list(conn, selected_catalog, selected_schema, selected_table)
+# columns = [column_placeholder] + columns
+selected_column = st.multiselect(column_placeholder, options=columns, default=[])
+
+st.write(f"selected catalog: {selected_catalog}, schema: {selected_schema}, table: {selected_table}, column: {selected_column}")
 
 # display table preview by clicking on the preview button
 if st.button("Preview Table"):
@@ -75,10 +80,12 @@ if st.button("Submit"):
         selected_catalog == catalog_placeholder
         or selected_schema == schema_placeholder
         or selected_table == table_placeholder
+        or selected_column == column_placeholder
     ):
         st.session_state.selected_catalog = selected_catalog
         st.session_state.selected_schema = selected_schema
         st.session_state.selected_table = selected_table
+        st.session_state.selected_column = selected_column
 
         # Send the catalog.schema.table for Quality Check
         # Returned Json Data
