@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import json
+import re
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode, GridUpdateMode, StAggridTheme
 from conn import create_connection
 from db import get_catalogs, get_schemas, get_tables, preview_table, get_columns_list
@@ -340,8 +341,20 @@ else:
 
     if new_function == "is_in_range":
         st.write("Put range limits:")
-        new_min = st.text_input("Min value", key="new_rule_min")
-        new_max = st.text_input("Max value", key="new_rule_max")
+
+        new_min = st.number_input("Min value", key="new_rule_min_number", format="%f")
+        new_max = st.number_input("Max value", key="new_rule_max_number", format="%f")
+
+        #validation message
+        if new_min is not None and new_max is not None:
+            try:
+                if float(new_min) > float(new_max):
+                    st.warning("Min is greater than Max — please check the limits.")
+                else:
+                    st.info(f"Range set: {new_min} — {new_max}")
+            except Exception:
+                # should not happen when using number_input, but kept defensively
+                st.error("Invalid numeric input for range.")
 
     elif new_function == "sql_expression":
         new_expression = st.text_input(
@@ -354,6 +367,30 @@ else:
             "Regex pattern (Please give regex pattern)",
             key="new_rule_regex",
         )
+
+        if new_regex and new_regex.strip():
+            #enforce at least one regex meta-character
+            meta_chars = r".^$*+?{}[]\|()"
+            has_meta = any(c in new_regex for c in meta_chars)
+
+            # long_enough = len(new_regex) >= 3
+
+            #compile check
+            try:
+                re.compile(new_regex)
+                compile_ok = True
+            except re.error as compile_err:
+                compile_ok = False
+                st.error(f"Invalid regex syntax: {compile_err}")
+
+            # Final decision
+            if compile_ok:
+                if not has_meta:
+                    st.warning("This pattern has no regex operators — it will only match literal text.")
+                # elif not long_enough:
+                #     st.warning("Regex pattern looks too short.")
+                else:
+                    st.success("Regex pattern looks valid.")
 
     elif new_function == "is_in_list":
         new_allowed = st.text_input(
@@ -371,16 +408,33 @@ else:
         if not new_column:
             errors.append("Please select a column.")
 
-        # rule-specific validations
         if new_function == "is_in_range":
-            if not new_min or not new_min.strip():
-                errors.append("Min value is required for is_in_range.")
-            if not new_max or not new_max.strip():
-                errors.append("Max value is required for is_in_range.")
+            try:
+                min_val = float(new_min)
+                max_val = float(new_max)
+                if min_val > max_val:
+                    errors.append("Min value cannot be greater than Max value for is_in_range.")
+            except Exception:
+                errors.append("Min and Max must be numeric values for is_in_range.")
+
         elif new_function == "sql_expression" and not new_expression.strip():
             errors.append("SQL expression is required for sql_expression.")
-        elif new_function == "regex_match" and not new_regex.strip():
-            errors.append("Regex is required for regex_match.")
+
+        elif new_function == "regex_match":
+            if not new_regex or not new_regex.strip():
+                errors.append("Regex is required for regex_match.")
+            else:
+                # compile check
+                try:
+                    re.compile(new_regex)
+                except re.error as compile_err:
+                    errors.append(f"Invalid regex syntax: {compile_err}")
+
+                # enforce meta-character rule
+                meta_chars = r".^$*+?{}[]\|()"
+                if not any(c in new_regex for c in meta_chars):
+                    errors.append("Pattern must contain at least one regex operator (.,^,$,*,+,?,{ },( ), etc.)")
+                    
         elif new_function == "is_in_list" and not new_allowed.strip():
             errors.append("Allowed values are required for is_in_list.")
 
@@ -400,8 +454,8 @@ else:
             }
 
             if new_function == "is_in_range":
-                new_row["min_limit"] = new_min.strip()
-                new_row["max_limit"] = new_max.strip()
+                new_row["min_limit"] = str(new_min)
+                new_row["max_limit"] = str(new_max)
             elif new_function == "sql_expression":
                 new_row["expression"] = new_expression.strip()
             elif new_function == "regex_match":
