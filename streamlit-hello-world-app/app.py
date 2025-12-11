@@ -45,7 +45,32 @@ table_placeholder = "select table"
 tables = [table_placeholder] + tables
 selected_table = st.selectbox("table", tables, index=0)
 
-st.write(f"selected catalog: {selected_catalog}, schema: {selected_schema}, table: {selected_table}")
+column_placeholder = "select column (Keep it Null if want to select all column)"
+selected_column = []
+if (
+    selected_catalog != catalog_placeholder
+    and selected_schema != schema_placeholder
+    and selected_table != table_placeholder
+):
+    try:
+        columns = get_columns_list(conn, selected_catalog, selected_schema, selected_table) or []
+    except Exception as e:
+        columns = []
+        st.warning(f"Could not fetch columns: {e}")
+
+    if columns:
+        selected_column = st.multiselect(column_placeholder, options=columns, default=[])
+        if not selected_column:
+            selected_column = columns
+    else:
+        st.info("No columns found for the selected table.")
+else:
+    st.info("Please select catalog, schema and table to choose columns.")
+
+st.write(
+    f"selected catalog: {selected_catalog}, schema: {selected_schema}, "
+    f"table: {selected_table}, column: {selected_column}"
+)
 
 # display table preview by clicking on the preview button
 if st.button("Preview Table"):
@@ -70,10 +95,12 @@ if st.button("Submit"):
         selected_catalog == catalog_placeholder
         or selected_schema == schema_placeholder
         or selected_table == table_placeholder
+        or selected_column == column_placeholder
     ):
         st.session_state.selected_catalog = selected_catalog
         st.session_state.selected_schema = selected_schema
         st.session_state.selected_table = selected_table
+        st.session_state.selected_column = selected_column
 
         # Send the catalog.schema.table for Quality Check
         # Returned Json Data
