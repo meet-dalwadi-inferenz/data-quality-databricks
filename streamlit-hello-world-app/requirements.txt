@@ -3,3 +3,6 @@ databricks-sdk
 databricks-sql-connector
 pandas
 streamlit-aggrid
+databricks-labs-dqx
+databricks-labs-dqx[llm]
+databricks-labs-dqx[pii]
