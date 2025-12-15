@@ -318,7 +318,6 @@ else:
         rename_col_map = st.session_state.get("rename_col_map", {})
         final_df_for_json = convert_df_suitable_for_json(selected_data_df,rename_col_map)
         json_data = unflatten_df_to_json(final_df_for_json,"!#!")
-        st.write(json_data)
 
     elif st.session_state.get("is_adding_rule", False):
         st.info("Adding new rule…")
