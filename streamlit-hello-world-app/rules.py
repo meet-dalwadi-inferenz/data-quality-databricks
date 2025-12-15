@@ -47,10 +47,13 @@ def load_rules_for_selected_table():
     try:
         rules_df = rules_json_to_dataframe(sample_rules)
 
-        # if "selected" not in df_rules.columns:
-        #     df_rules["selected"] = False
-        # rules_df = rules_df.set_index("rule_index", drop=True)
+        list_columns = [
+            col
+            for col in rules_df.columns
+            if rules_df[col].apply(lambda v: isinstance(v, list)).any()
+        ]
 
+        st.session_state.columns_with_list_values = list_columns
         st.session_state.rules_df = rules_df.copy()
 
     except Exception as e:

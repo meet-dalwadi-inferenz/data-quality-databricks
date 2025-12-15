@@ -3,6 +3,7 @@ import pandas as pd
 import json
 import re
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode, GridUpdateMode, StAggridTheme
+from st_aggrid import AgGrid, GridOptionsBuilder, JsCode, GridUpdateMode, StAggridTheme, DataReturnMode
 from conn import create_connection
 from db import get_catalogs, get_schemas, get_tables, preview_table, get_columns_list
 from rules import load_rules_for_selected_table
@@ -21,6 +22,8 @@ if "rules_df" not in st.session_state:
 if "pending_new_rule" not in st.session_state:
     st.session_state["pending_new_rule"] = None
 
+if "columns_with_list_values" not in st.session_state:
+    st.session_state.columns_with_list_values = []
 
 conn = get_connection()
 catalogs = get_catalogs(conn)
@@ -109,15 +112,14 @@ if st.button("Submit"):
     else:
         st.error("Please choose valid catalog, schema and table before submitting.")
 
-# SAFELY get rules_df from session state
 rules_df = st.session_state.get("rules_df", None)
-
 
 if rules_df is None:
     st.info("Please choose a catalog, schema, table and click Submit to load rules.")
 else:
     st.subheader("Applied Rules on the selected table")
 
+    rules_df = st.session_state.get("rules_df", None)
     # Apply pending new rule (if any)
     pending = st.session_state.get("pending_new_rule", None)
     if pending is not None:
@@ -127,100 +129,61 @@ else:
         st.session_state.pending_new_rule = None
 
 
-
-    rules_df = unified_column(rules_df)
+    rules_df = st.session_state.rules_df
+    # rules_df = unified_column(rules_df)
     rules_df = reorder_rule_columns(rules_df)
 
     st_aggrid_rules_df = rules_df.copy()
 
-    if "allowed" in st_aggrid_rules_df.columns:
-        st_aggrid_rules_df["allowed"] = st_aggrid_rules_df["allowed"].apply(list_to_string)
+    if "columns_with_list_values" in st.session_state:
+        for col in st.session_state.columns_with_list_values:
+            if col in st_aggrid_rules_df.columns:
+                st_aggrid_rules_df[col] = st_aggrid_rules_df[col].apply(list_to_string)
 
-    if "columns" in st_aggrid_rules_df.columns:
-        st_aggrid_rules_df["columns"] = st_aggrid_rules_df["columns"].apply(list_to_string)
+    is_editable_when_value_present = JsCode("""
+        function(params) {
+            // safety checks
+            console.log('editable params', params);
 
+            if (!params || !params.data || !params.colDef || !params.colDef.field ) return false;
 
-    is_editable_allowed = JsCode(
+            var field = params.colDef.field;
+            var v = params.data[field]; 
+            
+            if (v === null || v === undefined) return false;
+
+            if (typeof v === "string") {
+                return v.trim().length > 0;
+            }
+            return true;
+        }
+        """)
+    
+
+    value_setter_keep_editable = JsCode(
         """
         function(params) {
-            if (params.data.function === 'is_in_list') {
-                return true;
+            
+            console.log('setter params', params);
+            var field = params.colDef.field;
+            var newValue = params.newValue;
+
+            if (newValue === null || newValue === undefined ||
+                (typeof newValue === "string" && newValue.trim() === "")) {
+                params.data[field] = "__EMPTY__";
             } else {
-                return false;
+                params.data[field] = newValue;
             }
+            return true;
         }
         """
     )
 
-    is_editable_regex = JsCode(
-        """
-        function(params) {
-            if (params.data.function === 'regex_match') {
-                return true;
-            } else {
-                return false;
-            }
-        }
-        """
-    )
-
-    is_editable_expression = JsCode(
-        """
-        function(params){
-            if (params.data.function === 'sql_expression'){
-                return true;
-            }
-            else {
-                return false;
-            }
-        } 
-        """
-    )
-
-    id_editable_min_limit = JsCode(
-        """
-        function(params) {
-            if (params.data.function === 'is_in_range' || params.data.function === 'is_aggr_not_less_than')
-            {
-                return true;
-            }
-            else {
-                return false;
-            }
-        }
-        """
-    )
-
-    is_editable_max_limit = JsCode(
-        """
-        function(params) {
-            if (params.data.function === 'is_in_range' || params.data.function === 'is_aggr_not_greater_than')
-            {
-                return true;
-            }
-            else {
-                return false;
-            }
-        }
-        """
-    )
-
-    column_configs = {
-        "criticality": {
-            "editable": True,
-            "cellEditor": "agSelectCellEditor",
-            "cellEditorParams": {"values": ["error", "warn"]},
-        },
-        "allowed": {"editable": is_editable_allowed},
-        "regex": {"editable": is_editable_regex},
-        "trim_strings": {"editable": True},
-        "expression": {"editable": is_editable_expression},
-        "min_limit": {"editable": id_editable_min_limit},
-        "max_limit": {"editable": is_editable_max_limit},
-        "case_sensitive": {"editable": True, "cellDataType": "boolean"},
-    }
 
     st_aggrid_rules_df = st_aggrid_rules_df.reset_index(drop=True)
+
+    meta_cols = {"rule_index", "criticality", "function", "column", "columns"}
+    argument_cols = [c for c in st_aggrid_rules_df.columns if c not in meta_cols]
 
     gb = GridOptionsBuilder.from_dataframe(st_aggrid_rules_df)
     gb.configure_selection("multiple", use_checkbox=True)
@@ -245,9 +208,27 @@ else:
         # clear so it only applies once per added row
         st.session_state["last_added_rule_index"] = None
 
+    column_configs = {
+        "criticality": {
+            "editable": True,
+            "cellEditor": "agSelectCellEditor",
+            "cellEditorParams": {"values": ["error", "warn"]},
+        },
+        "trim_strings": {"editable": True},
+        "case_sensitive": {"editable": True, "cellDataType": "boolean"},
+    }
+
     for col, params in column_configs.items():
         if col in st_aggrid_rules_df.columns:
             gb.configure_column(col, **params)
+    
+    for col in argument_cols:
+        if col in st_aggrid_rules_df.columns  and col not in column_configs:
+            gb.configure_column(
+                col,
+                editable=is_editable_when_value_present,
+                valueSetter=value_setter_keep_editable
+            )
     
     grid_options = gb.build()
 
@@ -260,13 +241,13 @@ else:
             borderColor="#9ca3af",
         )
     )
-
+    
     grid_return = AgGrid(
         st_aggrid_rules_df,
         gridOptions=grid_options,
         allow_unsafe_jscode=True,
-        update_mode=GridUpdateMode.MODEL_CHANGED,  # send back edits
-        data_return_mode="AS_INPUT",
+        update_mode=GridUpdateMode.MODEL_CHANGED,
+        data_return_mode=DataReturnMode.AS_INPUT,
         theme=custom_theme,
         key="grid_rules",
     )
@@ -276,15 +257,23 @@ else:
     if selected_data_df is None or selected_data_df.empty:
         st.info("No rules selected!")
     else:
-        selected_data_df = selected_data_df.set_index("rule_index", drop=True)
 
-        if "allowed" in selected_data_df.columns:
-            selected_data_df["allowed"] = selected_data_df["allowed"].apply(string_to_list)
+        # For values which are empty, replace with sentinel
+        # meta_cols = {"rule_index", "criticality", "function", "column", "columns"}
+        # argument_cols = [c for c in st_aggrid_rules_df.columns if c not in meta_cols]
+        # sentinel = "__EMPTY__"
+        # for col in argument_cols:
+        #     if col in selected_data_df.columns:
+        #         selected_data_df[col] = selected_data_df[col].replace(sentinel, "")
 
-        if "columns" in selected_data_df.columns:
-            selected_data_df["columns"] = selected_data_df["columns"].apply(string_to_list)
+        if "columns_with_list_values" in st.session_state:
+            for col in st.session_state.columns_with_list_values:
+                if col in selected_data_df.columns:
+                    selected_data_df[col] = selected_data_df[col].apply(string_to_list)
 
         st.success(f"{len(selected_data_df)} rules selected for processing.")
+
+        selected_data_df = selected_data_df.set_index("rule_index", drop=True)
         st.dataframe(selected_data_df)
 
     st.markdown("---")
@@ -466,6 +455,12 @@ else:
                     for v in new_allowed.split(",")
                     if v.strip()
                 ]
+
+            # if "columns_with_list_values" not in st.session_state:
+            #     st.session_state.columns_with_list_values = []
+
+            # if "allowed" not in st.session_state.columns_with_list_values:
+            #     st.session_state.columns_with_list_values.append("allowed")
 
             st.session_state.pending_new_rule = new_row
 
