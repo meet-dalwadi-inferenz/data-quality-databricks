@@ -5,7 +5,7 @@ from st_aggrid import AgGrid, GridOptionsBuilder, JsCode, GridUpdateMode, StAggr
 from conn import create_connection
 from db import get_catalogs, get_schemas, get_tables, preview_table, get_columns_list
 from rules import load_rules_for_selected_table
-from helper_functions import list_to_string, string_to_list, normalize_allowed, reorder_rule_columns, unified_column
+from helper_functions import list_to_string, string_to_list, normalize_allowed, reorder_rule_columns, unified_column, unflatten_df_to_json, convert_df_suitable_for_json
 
 st.set_page_config(layout="wide")
 st.title("SELECT CATALOG, SCHEMA, TABLE")
@@ -22,6 +22,15 @@ if "pending_new_rule" not in st.session_state:
 
 if "columns_with_list_values" not in st.session_state:
     st.session_state.columns_with_list_values = []
+
+if "grid_version" not in st.session_state:
+    st.session_state.grid_version = 0
+
+if "selected_rule_indexes" not in st.session_state:
+    st.session_state.selected_rule_indexes = []
+
+if "is_adding_rule" not in st.session_state:
+    st.session_state.is_adding_rule = False
 
 conn = get_connection()
 catalogs = get_catalogs(conn)
@@ -150,6 +159,10 @@ else:
             
             if (v === null || v === undefined) return false;
 
+            if (typeof v === "boolean") {
+                    return true;
+                }
+
             if (typeof v === "string") {
                 return v.trim().length > 0;
             }
@@ -187,24 +200,50 @@ else:
     gb.configure_selection("multiple", use_checkbox=True)
 
 
-    last_added_rule_index = st.session_state.get("last_added_rule_index", None)
+    saved_ids = st.session_state.get("selected_rule_indexes", [])
+    saved_ids_str = [str(x) for x in saved_ids]
 
-    if last_added_rule_index is not None:
-        on_row_data_updated = JsCode(
-            f"""
-            function(params) {{
-                var target = {int(last_added_rule_index)};
-                params.api.forEachNode(function(node) {{
-                    if (node.data && node.data.rule_index === target) {{
-                        node.setSelected(true);  // add to existing selection
+    last_added_rule_index = st.session_state.get("last_added_rule_index", None)
+    last_added_rule_index_str = str(last_added_rule_index) if last_added_rule_index is not None else None
+
+    on_row_data_updated = JsCode(
+        f"""
+        function(params) {{
+            const saved = {saved_ids_str};
+            const last_added = {json.dumps(str(last_added_rule_index))};
+
+            console.log("Saved IDs:", saved);
+            console.log("Last added:", last_added);
+
+            params.api.forEachNode(function(node) {{
+
+                console.log(
+                    "Row index => rule_index:", 
+                    node.data?.rule_index, 
+                    ", type:", typeof node.data?.rule_index
+                );
+
+                // Try matching old selections
+                for (var i = 0; i < saved.length; i++) {{
+                    if (String(node.data.rule_index) == String(saved[i])) {{
+                        console.log("MATCH OLD => selecting:", node.data.rule_index);
+                        node.setSelected(true);
                     }}
-                }});
-            }}
-            """
-        )
-        gb.configure_grid_options(onRowDataUpdated=on_row_data_updated)
-        # clear so it only applies once per added row
-        st.session_state["last_added_rule_index"] = None
+                }}
+
+                // Try matching new row
+                if (node.data && last_added && String(node.data.rule_index) === last_added) {{
+                    console.log("MATCH NEW => selecting:", node.data.rule_index);
+                    node.setSelected(true);
+                }}
+            }});
+        }}
+        """
+    )
+
+
+    gb.configure_grid_options(onRowDataUpdated=on_row_data_updated)
+    st.session_state["last_added_rule_index"] = None
 
     column_configs = {
         "criticality": {
@@ -212,7 +251,7 @@ else:
             "cellEditor": "agSelectCellEditor",
             "cellEditorParams": {"values": ["error", "warn"]},
         },
-        "trim_strings": {"editable": True},
+        "trim_strings": {"editable": is_editable_when_value_present,"cellDataType": "boolean"},
         "case_sensitive": {"editable": True, "cellDataType": "boolean"},
     }
 
@@ -240,6 +279,9 @@ else:
         )
     )
     
+    grid_version = st.session_state.get("grid_version", 0)
+    grid_key = f"grid_rules_v{grid_version}"
+    
     grid_return = AgGrid(
         st_aggrid_rules_df,
         gridOptions=grid_options,
@@ -247,22 +289,22 @@ else:
         update_mode=GridUpdateMode.MODEL_CHANGED,
         data_return_mode=DataReturnMode.AS_INPUT,
         theme=custom_theme,
-        key="grid_rules",
+        key=grid_key,
     )
 
-    selected_data_df = grid_return.get("selected_data")
+    if grid_return["data"] is not None:
+        st.session_state.rules_df = grid_return["data"]
 
-    if selected_data_df is None or selected_data_df.empty:
-        st.info("No rules selected!")
-    else:
 
-        # For values which are empty, replace with sentinel
-        # meta_cols = {"rule_index", "criticality", "function", "column", "columns"}
-        # argument_cols = [c for c in st_aggrid_rules_df.columns if c not in meta_cols]
-        # sentinel = "__EMPTY__"
-        # for col in argument_cols:
-        #     if col in selected_data_df.columns:
-        #         selected_data_df[col] = selected_data_df[col].replace(sentinel, "")
+    selected_rows = grid_return.get("selected_rows", None)
+    if isinstance(selected_rows, pd.DataFrame) and not selected_rows.empty:
+        st.session_state.selected_rule_indexes = selected_rows["rule_index"].astype(int).tolist()
+
+    selected_data_df = grid_return.get("selected_data", None)
+
+    if isinstance(selected_data_df, pd.DataFrame) and not selected_data_df.empty:
+
+        st.session_state.is_adding_rule = False
 
         if "columns_with_list_values" in st.session_state:
             for col in st.session_state.columns_with_list_values:
@@ -271,8 +313,19 @@ else:
 
         st.success(f"{len(selected_data_df)} rules selected for processing.")
 
-        selected_data_df = selected_data_df.set_index("rule_index", drop=True)
         st.dataframe(selected_data_df)
+
+        rename_col_map = st.session_state.get("rename_col_map", {})
+        final_df_for_json = convert_df_suitable_for_json(selected_data_df,rename_col_map)
+        json_data = unflatten_df_to_json(final_df_for_json,"!#!")
+        st.write(json_data)
+
+    elif st.session_state.get("is_adding_rule", False):
+        st.info("Adding new rule…")
+
+    else:
+        st.info("No rules selected!")
+
 
     st.markdown("---")
 
@@ -401,16 +454,12 @@ else:
                     if v.strip()
                 ]
 
-            # if "columns_with_list_values" not in st.session_state:
-            #     st.session_state.columns_with_list_values = []
-
-            # if "allowed" not in st.session_state.columns_with_list_values:
-            #     st.session_state.columns_with_list_values.append("allowed")
-
             st.session_state.pending_new_rule = new_row
 
             # for auto-select of this rule in the grid
+            st.session_state["is_adding_rule"] = True
             st.session_state["last_added_rule_index"] = int(next_idx)
+            st.session_state["grid_version"] = st.session_state.get("grid_version", 0) + 1
 
             st.success(f"Added new rule with index {next_idx}.")
             st.rerun()

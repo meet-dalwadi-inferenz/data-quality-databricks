@@ -83,3 +83,16 @@ def unflatten_df_to_json(df,col_name_sep):
     
     return records
 
+
+def convert_df_suitable_for_json(df,rename_col_map):
+
+    df = df.copy()
+    na_replace_value = "NOT TO BE INCLUDED"
+
+    df.drop(columns=["rule_index"], inplace=True)
+    df = df.where(df.notna(), na_replace_value)
+
+    reversed_rename_col_map = {v: k for k, v in rename_col_map.items()}
+    df_renamed = df.rename(columns=reversed_rename_col_map)
+
+    return df_renamed

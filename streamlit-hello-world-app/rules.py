@@ -17,18 +17,16 @@ def rules_json_to_dataframe(rules_json):
     if not rules_map:
         return pd.DataFrame(), []
  
-    df = pd.json_normalize(list(rules_map.values()))
- 
-    # 3. Rename Columns: Clean up dot notation (e.g., 'check.arguments.column' -> 'column')
-    # We take the last part of the key to keep names simple
-    df.columns = [col.split('.')[-1] for col in df.columns]
- 
-    # 4. Add Index Column (from the keys of the dictionary)
+    df = pd.json_normalize(list(rules_map.values()), sep='!#!')
+    
+    # create mapping dict and save into state to reverse back to original column
+    rename_col_map = {col: col.split('!#!')[-1] for col in df.columns}
+    st.session_state.rename_col_map = rename_col_map
+
+    df = df.rename(columns=rename_col_map)
     df['rule_index'] = list(rules_map.keys())
  
-    # 5. Safe Reorder: Priority columns first, others appended
-    # We filter 'preferred_order' to only include columns that actually exist in the data
-    preferred_order = ['rule_index', 'column', 'function', 'criticality', 'columns']
+    preferred_order = ['rule_index','criticality', 'column', 'function', 'columns']
     existing_preferred = [c for c in preferred_order if c in df.columns]
     remaining_cols = [c for c in df.columns if c not in preferred_order]
     # Combine lists to form final column order
