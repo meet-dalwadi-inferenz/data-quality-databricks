@@ -1,7 +1,6 @@
 import pandas as pd
 import json
 
-
 def list_to_string(value):
     if isinstance(value, list):
         return ", ".join(value)
@@ -96,3 +95,7 @@ def convert_df_suitable_for_json(df,rename_col_map):
     df_renamed = df.rename(columns=reversed_rename_col_map)
 
     return df_renamed
+
+def has_invalid_values(df: pd.DataFrame) -> bool:
+    INVALID_SENTINEL = "__EMPTY__"
+    return (df == INVALID_SENTINEL).any().any()
