@@ -63,37 +63,152 @@ import json
 #     return df[existing + remaining]
 
 
-def rules_json_to_dataframe(rules_json):
-    """
-    Flatten the rules JSON into a pandas DataFrame using json_normalize (Optimized).
-    """
+# def rules_json_to_dataframe(rules_json):
+#     """
+#     Flatten the rules JSON into a pandas DataFrame using json_normalize (Optimized).
+#     """
+
+
+#     if isinstance(rules_json, list) and rules_json and "function" in rules_json[0]:
+
+#         indexed_rules = {}
+
+#         for idx, rule in enumerate(rules_json):
+#             function = rule.get("function")
+#             criticality = rule.get("criticality", "error")
+
+#             # Build arguments
+#             arguments = {}
+
+#             if "column" in rule:
+#                 arguments["column"] = rule["column"]
+
+#             if "columns" in rule:
+#                 arguments["columns"] = rule["columns"]
+
+#             for key in [
+#                 "regex",
+#                 "allowed",
+#                 "min_limit",
+#                 "max_limit",
+#                 "trim_strings",
+#                 "case_sensitive",
+#                 "expression",
+#                 "offset",
+#             ]:
+#                 if key in rule and rule[key] not in (None, [], ""):
+#                     arguments[key] = rule[key]
+
+#             # Special handling: is_unique expects "columns"
+#             if function == "is_unique" and "column" in arguments:
+#                 arguments["columns"] = [arguments.pop("column")]
+
+#             indexed_rules[str(idx)] = {
+#                 "criticality": criticality,
+#                 "check": {
+#                     "function": function,
+#                     "arguments": arguments,
+#                 }
+#             }
+
+#         rules_map = indexed_rules
+
+#     elif isinstance(rules_json, dict):
+#         rules_map = rules_json
+#     else:
+#         return pd.DataFrame(), []
+ 
+#     if not rules_map:
+#         return pd.DataFrame(), []
+ 
+#     df = pd.json_normalize(list(rules_map.values()), sep='!#!')
     
-    if isinstance(rules_json, list) and len(rules_json) > 0 and isinstance(rules_json[0], dict):
-        rules_map = rules_json[0]
+#     # create mapping dict and save into state to reverse back to original column
+#     rename_col_map = {col: col.split('!#!')[-1] for col in df.columns}
+#     st.session_state.rename_col_map = rename_col_map
+
+#     df = df.rename(columns=rename_col_map)
+#     df['rule_index'] = list(rules_map.keys())
+ 
+#     preferred_order = ['rule_index','criticality', 'column', 'function', 'columns']
+#     existing_preferred = [c for c in preferred_order if c in df.columns]
+#     remaining_cols = [c for c in df.columns if c not in preferred_order]
+#     # Combine lists to form final column order
+#     df = df[existing_preferred + remaining_cols]
+ 
+#     return df
+
+# def rules_json_to_dataframe(rules_json):
+#     """
+#     Flatten the rules JSON into a pandas DataFrame using json_normalize (Optimized).
+#     """
+#     if isinstance(rules_json, list) and len(rules_json) > 0 and isinstance(rules_json[0], dict):
+#         rules_map = rules_json[0]
+
+#     elif isinstance(rules_json, dict):
+#         rules_map = rules_json
+#     else:
+#         return pd.DataFrame(), []
+ 
+#     if not rules_map:
+#         return pd.DataFrame(), []
+ 
+#     df = pd.json_normalize(list(rules_map.values()), sep='!#!')
+    
+#     # create mapping dict and save into state to reverse back to original column
+#     rename_col_map = {col: col.split('!#!')[-1] for col in df.columns}
+#     st.session_state.rename_col_map = rename_col_map
+
+#     df = df.rename(columns=rename_col_map)
+#     df['rule_index'] = list(rules_map.keys())
+ 
+#     preferred_order = ['rule_index','criticality', 'column', 'function', 'columns']
+#     existing_preferred = [c for c in preferred_order if c in df.columns]
+#     remaining_cols = [c for c in df.columns if c not in preferred_order]
+#     # Combine lists to form final column order
+#     df = df[existing_preferred + remaining_cols]
+ 
+#     return df
+
+
+def rules_json_to_dataframe(rules_json):
+
+    if isinstance(rules_json, list) and len(rules_json) > 0:
+        if (
+            isinstance(rules_json[0], dict)
+            and all(isinstance(v, dict) for v in rules_json[0].values())
+            and all(isinstance(k, (str, int)) for k in rules_json[0].keys())
+        ):
+            rules_map = rules_json[0]
+
+        else:
+            rules_map = {str(i): rule for i, rule in enumerate(rules_json)}
+
     elif isinstance(rules_json, dict):
         rules_map = rules_json
+
     else:
         return pd.DataFrame(), []
- 
+
     if not rules_map:
         return pd.DataFrame(), []
- 
+
     df = pd.json_normalize(list(rules_map.values()), sep='!#!')
-    
-    # create mapping dict and save into state to reverse back to original column
+
     rename_col_map = {col: col.split('!#!')[-1] for col in df.columns}
     st.session_state.rename_col_map = rename_col_map
 
     df = df.rename(columns=rename_col_map)
     df['rule_index'] = list(rules_map.keys())
- 
-    preferred_order = ['rule_index','criticality', 'column', 'function', 'columns']
+
+    preferred_order = ['rule_index', 'criticality', 'column', 'function', 'columns']
     existing_preferred = [c for c in preferred_order if c in df.columns]
     remaining_cols = [c for c in df.columns if c not in preferred_order]
-    # Combine lists to form final column order
+
     df = df[existing_preferred + remaining_cols]
- 
+
     return df
+
 
 def load_rules_for_selected_table():
 
@@ -106,14 +221,17 @@ def load_rules_for_selected_table():
     try:
         rules_df = rules_json_to_dataframe(sample_rules)
 
+        save_columns_with_list_values(rules_df)
+        st.session_state.rules_df = rules_df.copy()
+
+    except Exception as e:
+        st.error(f"Failed to parse rules JSON: {e}")
+
+
+def save_columns_with_list_values(rules_df):
         list_columns = [
             col
             for col in rules_df.columns
             if rules_df[col].apply(lambda v: isinstance(v, list)).any()
         ]
-
         st.session_state.columns_with_list_values = list_columns
-        st.session_state.rules_df = rules_df.copy()
-
-    except Exception as e:
-        st.error(f"Failed to parse rules JSON: {e}")

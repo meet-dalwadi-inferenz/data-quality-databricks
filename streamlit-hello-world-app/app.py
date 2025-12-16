@@ -4,11 +4,11 @@ import json
 import re
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode, GridUpdateMode, StAggridTheme
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode, GridUpdateMode, StAggridTheme, DataReturnMode
-from conn import create_connection
-from db import get_catalogs, get_schemas, get_tables, preview_table, get_columns_list
-from rules import load_rules_for_selected_table, rules_json_to_dataframe
-from metadata_helper import check_metadata_for_table,generate_checks_by_checking_column_list, generate_checks, get_idx_json, unflatten_df_to_json,generate_checks_for_input_columns, insert_or_update_metadata, apply_safe_column_mapping
-from helper_functions import list_to_string, string_to_list, normalize_allowed, reorder_rule_columns, unified_column, unflatten_df_to_json, convert_df_suitable_for_json
+from helper.conn import create_connection
+from helper.db import get_catalogs, get_schemas, get_tables, preview_table, get_columns_list
+from helper.rules import load_rules_for_selected_table, rules_json_to_dataframe,save_columns_with_list_values
+from helper.metadata_helper import check_metadata_for_table,generate_checks_by_checking_column_list, generate_checks, get_idx_json, unflatten_df_to_json,generate_checks_for_input_columns, insert_or_update_metadata, apply_safe_column_mapping
+from helper.helper_functions import list_to_string, string_to_list, normalize_allowed, reorder_rule_columns, unified_column, unflatten_df_to_json, convert_df_suitable_for_json,has_invalid_values
 
 st.set_page_config(layout="wide")
 st.title("Data Quality Validator")
@@ -114,11 +114,6 @@ if st.button("Submit"):
             st.session_state["selected_table"] = selected_table
             st.session_state["selected_column"] = selected_column
 
-rules_df = st.session_state.get("rules_df", None)
-
-if rules_df is None:
-    st.info("Please choose a catalog, schema, table and click Submit to load rules.")
-else:
             result = check_metadata_for_table(selected_catalog, selected_schema, selected_table)
             st.session_state["metadata_check_result"] = result
 
@@ -152,7 +147,9 @@ else:
 
                     # Load existing rules if present
                     if validation_rules:
-                        df = rules_json_to_dataframe(validation_rules)
+                        rules_json = get_idx_json(validation_rules)
+                        df = rules_json_to_dataframe(rules_json)
+                        save_columns_with_list_values(df)
                         st.session_state["rules_df"] = df
                     else:
                         st.session_state["rules_df"] = None
@@ -162,6 +159,7 @@ else:
                     if validation_rules:
                         try:
                             df = rules_json_to_dataframe(validation_rules)
+                            save_columns_with_list_values(df)
                             st.session_state["rules_df"] = df
                         except Exception as e:
                             st.error(f"conversion_failure: {e}")
@@ -193,7 +191,7 @@ if meta_result:
                 # st.write(rules_json)
                 
                 df = rules_json_to_dataframe(rules_json)
-
+                save_columns_with_list_values(df)
                 st.session_state["rules_df"] = df
 
                 st.success("Generated rules for all columns.")
@@ -229,6 +227,7 @@ if meta_result:
 
                     st.session_state["archived_rules"].extend(archived.to_dict("records"))
                     st.session_state["rules_df"] = df[~mask].reset_index(drop=True)
+                    save_columns_with_list_values(st.session_state["rules_df"])
                     st.success(f"Archived {len(archived)} rules.")
                 except Exception as e:
                     st.error(f"Archive failed: {e}")
@@ -238,65 +237,68 @@ if st.session_state.get("archived_rules"):
     st.subheader("Archived Rules")
     st.dataframe(pd.DataFrame(st.session_state["archived_rules"]))
 
-raw_rules_obj = st.session_state.get("rules_df", None)
+# raw_rules_obj = st.session_state.get("rules_df", None)
 
-def _normalize_to_df(obj):
-    import pandas as pd
-    # None => None
-    if obj is None:
-        return None
+# def _normalize_to_df(obj):
+#     import pandas as pd
+#     # None => None
+#     if obj is None:
+#         return None
 
-    # Already a DataFrame -> return as-is
-    if isinstance(obj, pd.DataFrame):
-        return obj
+#     # Already a DataFrame -> return as-is
+#     if isinstance(obj, pd.DataFrame):
+#         return obj
 
-    # If a tuple -> try to find a DataFrame inside, or convert first element
-    if isinstance(obj, tuple):
-        for part in obj:
-            if isinstance(part, pd.DataFrame):
-                return part
-        # fallback: try convert first element if it's list/dict
-        if len(obj) > 0:
-            first = obj[0]
-            if isinstance(first, (list, dict)):
-                try:
-                    return pd.DataFrame(first)
-                except Exception:
-                    return None
-        return None
+#     # If a tuple -> try to find a DataFrame inside, or convert first element
+#     if isinstance(obj, tuple):
+#         for part in obj:
+#             if isinstance(part, pd.DataFrame):
+#                 return part
+#         # fallback: try convert first element if it's list/dict
+#         if len(obj) > 0:
+#             first = obj[0]
+#             if isinstance(first, (list, dict)):
+#                 try:
+#                     return pd.DataFrame(first)
+#                 except Exception:
+#                     return None
+#         return None
 
-    # If list of dicts -> DataFrame
-    if isinstance(obj, list):
-        try:
-            return pd.DataFrame(obj)
-        except Exception:
-            return None
+#     # If list of dicts -> DataFrame
+#     if isinstance(obj, list):
+#         try:
+#             return pd.DataFrame(obj)
+#         except Exception:
+#             return None
 
-    # If dict -> one-row DataFrame
-    if isinstance(obj, dict):
-        try:
-            return pd.DataFrame([obj])
-        except Exception:
-            return None
+#     # If dict -> one-row DataFrame
+#     if isinstance(obj, dict):
+#         try:
+#             return pd.DataFrame([obj])
+#         except Exception:
+#             return None
 
-    # If pandas Series -> convert to one-row DF
-    if isinstance(obj, pd.Series):
-        try:
-            return obj.to_frame().T
-        except Exception:
-            return None
+#     # If pandas Series -> convert to one-row DF
+#     if isinstance(obj, pd.Series):
+#         try:
+#             return obj.to_frame().T
+#         except Exception:
+#             return None
 
-    # Unknown types -> None (avoid crash)
-    return None
+#     # Unknown types -> None (avoid crash)
+#     return None
 
-rules_df = _normalize_to_df(raw_rules_obj)
-# store normalized version back to session for consistency
-st.session_state["rules_df"] = rules_df
+# rules_df = _normalize_to_df(raw_rules_obj)
+# # store normalized version back to session for consistency
+# st.session_state["rules_df"] = rules_df
+
+rules_df = st.session_state.get("rules_df", None)
 
 if rules_df is not None:
     st.subheader("Applied Rules on the selected table")
 
     rules_df = st.session_state.get("rules_df", None)
+    save_columns_with_list_values(rules_df)
     # Apply pending new rule (if any)
     pending = st.session_state.get("pending_new_rule", None)
     if pending is not None:
@@ -429,7 +431,8 @@ if rules_df is not None:
             "cellEditorParams": {"values": ["error", "warn"]},
         },
         "trim_strings": {"editable": is_editable_when_value_present,"cellDataType": "boolean"},
-        "case_sensitive": {"editable": True, "cellDataType": "boolean"},
+        "case_sensitive": {"editable": is_editable_when_value_present, "cellDataType": "boolean"},
+        "filter":{"editable":True}
     }
 
     for col, params in column_configs.items():
@@ -493,10 +496,20 @@ if rules_df is not None:
         st.session_state["selected_rules"] = selected_data_df
         st.dataframe(selected_data_df)
 
-        rename_col_map = st.session_state.get("rename_col_map", {})
-        final_df_for_json = convert_df_suitable_for_json(selected_data_df,rename_col_map)
-        json_data = unflatten_df_to_json(final_df_for_json,"!#!")
-        st.session_state["ui_rules_json"] = json_data
+        has_invalid = has_invalid_values(selected_data_df)
+        
+        st.session_state.has_invalid_selected_rules = has_invalid
+
+        if has_invalid:
+            st.error(
+                "❌ Some selected rules contain empty required values.\n\n"
+                "Please fill in all required fields or deselect the affected rows before saving."
+            )
+        else:
+            rename_col_map = st.session_state.get("rename_col_map", {})
+            final_df_for_json = convert_df_suitable_for_json(selected_data_df,rename_col_map)
+            json_data = unflatten_df_to_json(final_df_for_json,"!#!")
+            st.session_state["ui_rules_json"] = json_data
 
 
     elif st.session_state.get("is_adding_rule", False):
@@ -694,59 +707,38 @@ if rules_df is not None:
         )
 
     # ================= SAVE APPLIED RULES =================
-    if st.button("Save Applied Rules", key="btn_save_applied_rules"):
+    save_disabled = st.session_state.get("has_invalid_selected_rules", True)
+    if st.button("Save Applied Rules", key="btn_save_applied_rules", disabled=save_disabled):
         try:
             if not target_table or not quarantine_table:
                 st.warning("Please provide both Target and Quarantine table details.")
             else:
-                grid_df = st.session_state.get("selected_rules")
+                # Split target & quarantine tables
+                op_catalog, op_schema, op_table = target_table.split(".")
+                qt_catalog, qt_schema, qt_table = quarantine_table.split(".")
 
-                if grid_df is None or grid_df.empty:
-                    st.warning("No rules available to save.")
+                # Call your insert function
+                result = insert_or_update_metadata(
+                    ip_catalog=st.session_state["selected_catalog"],
+                    ip_schema=st.session_state["selected_schema"],
+                    ip_table=st.session_state["selected_table"],
+                    op_catalog=op_catalog,
+                    op_schema=op_schema,
+                    op_table=op_table,
+                    qt_catalog=qt_catalog,
+                    qt_schema=qt_schema,
+                    qt_table=qt_table,
+                    op_check_meta_data_func=st.session_state["metadata_check_result"],
+                    ui_rules_json=st.session_state["ui_rules_json"]
+                )
+                
+                if result['status'] == 'success':
+                    st.success("Applied rules saved successfully.")
                 else:
-                    grid_df = grid_df.copy()
-
-                    # UI → backend format
-                    if "allowed" in grid_df.columns:
-                        grid_df["allowed"] = grid_df["allowed"].apply(string_to_list)
-
-                    if "columns" in grid_df.columns:
-                        grid_df["columns"] = grid_df["columns"].apply(string_to_list)
-
-                    if "rule_index" in grid_df.columns:
-                        grid_df["rule_index"] = (
-                            pd.to_numeric(grid_df["rule_index"], errors="coerce")
-                            .fillna(0)
-                            .astype(int)
-                        )
-                    
-                    # Split target & quarantine tables
-                    op_catalog, op_schema, op_table = target_table.split(".")
-                    qt_catalog, qt_schema, qt_table = quarantine_table.split(".")
-
-                    # Call your insert function
-                    result = insert_or_update_metadata(
-                        ip_catalog=st.session_state["selected_catalog"],
-                        ip_schema=st.session_state["selected_schema"],
-                        ip_table=st.session_state["selected_table"],
-                        op_catalog=op_catalog,
-                        op_schema=op_schema,
-                        op_table=op_table,
-                        qt_catalog=qt_catalog,
-                        qt_schema=qt_schema,
-                        qt_table=qt_table,
-                        op_check_meta_data_func=st.session_state["metadata_check_result"],
-                        ui_rules_json=st.session_state["ui_rules_json"]
-                    )
-                    
-                    if result['status'] == 'success':
-                        st.success("Applied rules saved successfully.")
-                    else:
-                        st.error(f"Failed to save applied rules: {result['message']}")
+                    st.error(f"Failed to save applied rules: {result['message']}")
 
         except ValueError:
             st.error("Please enter table names in catalog.schema.table format.")
         except Exception as e:
             st.error(f"Failed to save applied rules: {e}")
     # =============================================================
-
