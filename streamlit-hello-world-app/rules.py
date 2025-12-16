@@ -2,11 +2,72 @@ import streamlit as st
 import pandas as pd
 import json
 
+# def rules_json_to_dataframe(rules_json_string):
+#     """
+#     Convert the validation_rules JSON STRING from metadata
+#     into a clean DataFrame for AG-Grid editing.
+#     """
+
+#     if not rules_json_string:
+#         return pd.DataFrame()
+
+#     try:
+#         rules_list = json.loads(rules_json_string)
+#     except Exception as e:
+#         print("JSON parsing error:", e)
+#         return pd.DataFrame()
+
+#     if not isinstance(rules_list, list) or len(rules_list) == 0:
+#         return pd.DataFrame()
+
+#     # Flatten JSON
+#     df = pd.json_normalize(rules_list, sep=".")
+
+#     # Rename to simpler column names
+    # rename_map = {
+    #     "check.function": "function",
+    #     "check.arguments.column": "column",
+    #     "check.arguments.columns": "columns",
+    #     "check.arguments.regex": "regex",
+    #     "check.arguments.expression": "expression",
+    #     "check.arguments.allowed": "allowed",
+    #     "check.arguments.min_limit": "min_limit",
+    #     "check.arguments.max_limit": "max_limit",
+    #     "check.arguments.case_sensitive": "case_sensitive",
+    # }
+
+#     df = df.rename(columns=rename_map)
+
+#     # Add rule_index for UI (not stored in metadata)
+#     df["rule_index"] = range(len(df))
+
+#     # Reorder columns
+#     preferred_cols = [
+#         "rule_index",
+#         "criticality",
+#         "function",
+#         "column",
+#         "columns",
+#         "regex",
+#         "expression",
+#         "allowed",
+#         "min_limit",
+#         "max_limit",
+#         "case_sensitive",
+#         "filter",
+#     ]
+
+#     existing = [c for c in preferred_cols if c in df.columns]
+#     remaining = [c for c in df.columns if c not in existing]
+
+#     return df[existing + remaining]
+
+
 def rules_json_to_dataframe(rules_json):
     """
     Flatten the rules JSON into a pandas DataFrame using json_normalize (Optimized).
     """
-
+    
     if isinstance(rules_json, list) and len(rules_json) > 0 and isinstance(rules_json[0], dict):
         rules_map = rules_json[0]
     elif isinstance(rules_json, dict):

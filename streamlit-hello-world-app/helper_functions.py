@@ -1,7 +1,6 @@
 import pandas as pd
 import json
 
-
 def list_to_string(value):
     if isinstance(value, list):
         return ", ".join(value)

@@ -6,11 +6,12 @@ from st_aggrid import AgGrid, GridOptionsBuilder, JsCode, GridUpdateMode, StAggr
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode, GridUpdateMode, StAggridTheme, DataReturnMode
 from conn import create_connection
 from db import get_catalogs, get_schemas, get_tables, preview_table, get_columns_list
-from rules import load_rules_for_selected_table
+from rules import load_rules_for_selected_table, rules_json_to_dataframe
 from helper_functions import list_to_string, string_to_list, normalize_allowed, reorder_rule_columns, unified_column
+from metadata_helper import check_metadata_for_table,generate_checks_by_checking_column_list, generate_checks, get_idx_json, unflatten_df_to_json,generate_checks_for_input_columns, insert_or_update_metadata, apply_safe_column_mapping
 
 st.set_page_config(layout="wide")
-st.title("SELECT CATALOG, SCHEMA, TABLE")
+st.title("Data Quality Validator")
 
 @st.cache_resource  # connection is cached
 def get_connection():
@@ -71,52 +72,220 @@ if (
 else:
     st.info("Please select catalog, schema and table to choose columns.")
 
-st.write(
-    f"selected catalog: {selected_catalog}, schema: {selected_schema}, "
-    f"table: {selected_table}, column: {selected_column}"
-)
+
+st.write(f"selected catalog: {selected_catalog}")
+st.write(f"selected schema: {selected_schema}")
+st.write(f"selected table: {selected_table}")
+st.write(f"selected column: {selected_column}")
 
 # display table preview by clicking on the preview button
-if st.button("Preview Table"):
-    if not (
-        selected_catalog == catalog_placeholder
-        or selected_schema == schema_placeholder
-        or selected_table == table_placeholder
-    ):
-        with st.spinner("Loading table preview..."):
-            rows, columns, error = preview_table(conn, selected_catalog, selected_schema, selected_table)
-            if error:
-                st.error(f"Error while previewing table : {error}")
-            else:
-                df = pd.DataFrame(rows, columns=columns)
-                st.dataframe(df)
-    else:
-        st.error("Please choose valid catalog, schema and table before previewing.")
-
+# if st.button("Preview Table"):
+#     if not (
+#         selected_catalog == catalog_placeholder
+#         or selected_schema == schema_placeholder
+#         or selected_table == table_placeholder
+#     ):
+#         with st.spinner("Loading table preview..."):
+#             rows, columns, error = preview_table(conn, selected_catalog, selected_schema, selected_table)
+#             if error:
+#                 st.error(f"Error while previewing table : {error}")
+#             else:
+#                 df = pd.DataFrame(rows, columns=columns)
+#                 st.dataframe(df)
+#     else:
+#         st.error("Please choose valid catalog, schema and table before previewing.")
 
 if st.button("Submit"):
-    if not (
-        selected_catalog == catalog_placeholder
-        or selected_schema == schema_placeholder
-        or selected_table == table_placeholder
-        or selected_column == column_placeholder
-    ):
-        st.session_state.selected_catalog = selected_catalog
-        st.session_state.selected_schema = selected_schema
-        st.session_state.selected_table = selected_table
-        st.session_state.selected_column = selected_column
-
-        # Send the catalog.schema.table for Quality Check
-        # Returned Json Data
-        load_rules_for_selected_table()
+    if selected_table == table_placeholder:
+        st.error("Select a table first.")
     else:
-        st.error("Please choose valid catalog, schema and table before submitting.")
+        try:
+            st.session_state["selected_catalog"] = selected_catalog
+            st.session_state["selected_schema"] = selected_schema
+            st.session_state["selected_table"] = selected_table
+            st.session_state["selected_column"] = selected_column
 
 rules_df = st.session_state.get("rules_df", None)
 
 if rules_df is None:
     st.info("Please choose a catalog, schema, table and click Submit to load rules.")
 else:
+            result = check_metadata_for_table(selected_catalog, selected_schema, selected_table)
+            st.session_state["metadata_check_result"] = result
+
+            if not result.get("meta_found"):
+                st.session_state["rules_df"] = None
+                st.warning("No metadata found for this table.")
+
+            else:
+                meta_record = result.get("meta_record", {})
+                raw_rules = meta_record.get("validation_rules")
+
+                # Convert JSON String → Python List using ONLY json.loads
+                try:
+                    validation_rules = raw_rules
+                except Exception as e:
+                    validation_rules = None
+                    st.error(f"Failed to parse validation_rules JSON string. Error: {e}")
+
+                # Column Change Handling 
+                is_changed = result.get("isChanged", False)
+                added_cols  = result.get("added_columns", [])
+                removed_cols = result.get("removed_columns", [])
+
+                if is_changed:
+                    st.success("Metadata found, but column structure has changed.")
+                    if added_cols:
+                        st.warning(f"New columns found: {added_cols}")
+
+                    if removed_cols:
+                        st.info("Please generate rules for new columns or archive removed-column rules.")
+
+                    # Load existing rules if present
+                    if validation_rules:
+                        df = rules_json_to_dataframe(validation_rules)
+                        st.session_state["rules_df"] = df
+                    else:
+                        st.session_state["rules_df"] = None
+                else:
+                    st.success("Metadata found and no changes in column detected. Below are Previous Validation Rules")
+
+                    if validation_rules:
+                        try:
+                            df = rules_json_to_dataframe(validation_rules)
+                            st.session_state["rules_df"] = df
+                        except Exception as e:
+                            st.error(f"conversion_failure: {e}")
+                    else:
+                        st.warning("Validation rules are empty.")
+                        st.session_state["rules_df"] = None
+
+        except Exception as e:
+            st.error(f"Metadata check failed: {e}")
+            st.session_state["metadata_check_result"] = None
+
+
+# ----------- FOLLOW-UP ACTION BUTTONS (OUTSIDE submit button) -----------
+meta_result = st.session_state.get("metadata_check_result")
+
+if meta_result:
+    st.markdown("---")
+
+    # If no metadata → allow generate rules
+    if not meta_result.get("meta_found", False):
+        prompt = st.text_area("Prompt", placeholder = 'Keep Null, If you dont want to give any prompt')
+        
+        if st.button("Generate rules for Selected columns"):
+            try:
+                ai_rules = generate_checks_by_checking_column_list( st.session_state["selected_catalog"], st.session_state["selected_schema"], st.session_state["selected_table"], "databricks/databricks-claude-sonnet-4-5", prompt, st.session_state["selected_column"])
+
+                rules_json = get_idx_json(ai_rules)
+                
+                # st.write(rules_json)
+                
+                df = rules_json_to_dataframe(rules_json)
+
+                st.session_state["rules_df"] = df
+
+                st.success("Generated rules for all columns.")
+            except Exception as e:
+                st.error(f"Rule generation failed: {e}")
+
+    else:
+        added = meta_result.get("added_columns", [])
+        removed = meta_result.get("removed_columns", [])
+
+        if added:
+            prompt = st.text_area("Prompt", placeholder = 'Keep Null, If you dont want to give any prompt')
+
+            if st.button("Generate rules for New columns"):
+                try:
+                    df_new = generate_checks_by_checking_column_list(st.session_state["selected_catalog"], st.session_state["selected_schema"], st.session_state["selected_table"], "databricks/databricks-claude-sonnet-4-5",prompt, added)
+
+                    st.session_state["rules_df"] = pd.concat([st.session_state["rules_df"], df_new], ignore_index=True)
+                    st.success("Generated rules for new columns.")
+
+                except Exception as e:
+                    st.error(f"Failed to generate rules: {e}")
+
+        if removed:
+            if st.button("Archive rules for REMOVED columns"):
+                try:
+                    df = st.session_state.get("rules_df", pd.DataFrame())
+                    mask = df["check.arguments.column"].isin(removed)
+                    archived = df[mask]
+
+                    if "archived_rules" not in st.session_state:
+                        st.session_state["archived_rules"] = []
+
+                    st.session_state["archived_rules"].extend(archived.to_dict("records"))
+                    st.session_state["rules_df"] = df[~mask].reset_index(drop=True)
+                    st.success(f"Archived {len(archived)} rules.")
+                except Exception as e:
+                    st.error(f"Archive failed: {e}")
+
+# show archived
+if st.session_state.get("archived_rules"):
+    st.subheader("Archived Rules")
+    st.dataframe(pd.DataFrame(st.session_state["archived_rules"]))
+
+raw_rules_obj = st.session_state.get("rules_df", None)
+
+def _normalize_to_df(obj):
+    import pandas as pd
+    # None => None
+    if obj is None:
+        return None
+
+    # Already a DataFrame -> return as-is
+    if isinstance(obj, pd.DataFrame):
+        return obj
+
+    # If a tuple -> try to find a DataFrame inside, or convert first element
+    if isinstance(obj, tuple):
+        for part in obj:
+            if isinstance(part, pd.DataFrame):
+                return part
+        # fallback: try convert first element if it's list/dict
+        if len(obj) > 0:
+            first = obj[0]
+            if isinstance(first, (list, dict)):
+                try:
+                    return pd.DataFrame(first)
+                except Exception:
+                    return None
+        return None
+
+    # If list of dicts -> DataFrame
+    if isinstance(obj, list):
+        try:
+            return pd.DataFrame(obj)
+        except Exception:
+            return None
+
+    # If dict -> one-row DataFrame
+    if isinstance(obj, dict):
+        try:
+            return pd.DataFrame([obj])
+        except Exception:
+            return None
+
+    # If pandas Series -> convert to one-row DF
+    if isinstance(obj, pd.Series):
+        try:
+            return obj.to_frame().T
+        except Exception:
+            return None
+
+    # Unknown types -> None (avoid crash)
+    return None
+
+rules_df = _normalize_to_df(raw_rules_obj)
+# store normalized version back to session for consistency
+st.session_state["rules_df"] = rules_df
+
+if rules_df is not None:
+>>>>>>> Stashed changes
     st.subheader("Applied Rules on the selected table")
 
     rules_df = st.session_state.get("rules_df", None)
@@ -128,7 +297,6 @@ else:
         st.session_state.rules_df = rules_df
         st.session_state.pending_new_rule = None
 
-
     rules_df = st.session_state.rules_df
     # rules_df = unified_column(rules_df)
     rules_df = reorder_rule_columns(rules_df)
@@ -139,6 +307,17 @@ else:
         for col in st.session_state.columns_with_list_values:
             if col in st_aggrid_rules_df.columns:
                 st_aggrid_rules_df[col] = st_aggrid_rules_df[col].apply(list_to_string)
+
+    # ---- FIX: ensure rule_index is always numeric ----
+    if "rule_index" in st_aggrid_rules_df.columns:
+        st_aggrid_rules_df["rule_index"] = pd.to_numeric(
+            st_aggrid_rules_df["rule_index"],
+            errors="coerce"
+        ).fillna(-1).astype(int)
+
+
+    if "allowed" in st_aggrid_rules_df.columns:
+        st_aggrid_rules_df["allowed"] = st_aggrid_rules_df["allowed"].apply(list_to_string)
 
     is_editable_when_value_present = JsCode("""
         function(params) {
@@ -273,14 +452,14 @@ else:
 
         st.success(f"{len(selected_data_df)} rules selected for processing.")
 
-        selected_data_df = selected_data_df.set_index("rule_index", drop=True)
+        st.session_state["selected_rules"] = selected_data_df
         st.dataframe(selected_data_df)
 
     st.markdown("---")
-
     st.markdown("### ➕ Add new rule")
 
     # next_idx calculation
+# ---- FIX: convert to numeric before computing next index ----
     if (
         st_aggrid_rules_df is None
         or st_aggrid_rules_df.empty
@@ -288,38 +467,24 @@ else:
     ):
         next_idx = 0
     else:
+        st_aggrid_rules_df["rule_index"] = pd.to_numeric(
+            st_aggrid_rules_df["rule_index"],
+            errors="coerce"
+        ).fillna(-1).astype(int)
+
         next_idx = int(st_aggrid_rules_df["rule_index"].max()) + 1
 
-    # Column dropdown – from actual table columns
-    current_cols = []
-    try:
-        current_cols = get_columns_list(conn, selected_catalog, selected_schema, selected_table)
-    except Exception:
-        # fallback: columns from rules_df if DESCRIBE fails
-        if "column" in st_aggrid_rules_df.columns:
-            current_cols = sorted(st_aggrid_rules_df["column"].dropna().unique().tolist())
 
-    new_column = st.selectbox(
-        "Column name",
-        current_cols,
-        key="new_rule_column",
-    )
+    current_cols = get_columns_list(conn, st.session_state["selected_catalog"], st.session_state["selected_schema"], st.session_state["selected_table"])
+
+    new_column = st.selectbox("Column name",current_cols,key="new_rule_column")
 
     # Criticality
-    new_criticality = st.selectbox(
-        "Criticality",
-        ["error", "warn"],
-        index=0,
-        key="new_rule_criticality",
-    )
+    new_criticality = st.selectbox("Criticality", ["error", "warn"], index=0, key="new_rule_criticality")
 
     # Rule name
     function_options = sorted(st_aggrid_rules_df["function"].dropna().unique().tolist())
-    new_function = st.selectbox(
-        "Rule name",
-        function_options,
-        key="new_function",
-    )
+    new_function = st.selectbox("Rule name", function_options, key="new_function")
 
     # Dynamic inputs depending on function
     new_min = None
@@ -346,23 +511,15 @@ else:
                 st.error("Invalid numeric input for range.")
 
     elif new_function == "sql_expression":
-        new_expression = st.text_input(
-            "SQL expression (Please give sql_expression)",
-            key="new_rule_expression",
-        )
+        new_expression = st.text_input("SQL expression (Please give sql_expression)", key="new_rule_expression")
 
     elif new_function == "regex_match":
-        new_regex = st.text_input(
-            "Regex pattern (Please give regex pattern)",
-            key="new_rule_regex",
-        )
+        new_regex = st.text_input("Regex pattern (Please give regex pattern)", key="new_rule_regex")
 
         if new_regex and new_regex.strip():
             #enforce at least one regex meta-character
             meta_chars = r".^$*+?{}[]\|()"
             has_meta = any(c in new_regex for c in meta_chars)
-
-            # long_enough = len(new_regex) >= 3
 
             #compile check
             try:
@@ -393,7 +550,6 @@ else:
     if st.button("Add rule", key="btn_add_rule"):
 
         errors = []
-
         if not new_column:
             errors.append("Please select a column.")
 
@@ -469,3 +625,101 @@ else:
 
             st.success(f"Added new rule with index {next_idx}.")
             st.rerun()
+    
+    # ================= TARGET & QUARANTINE INPUTS =================
+    st.markdown("---")
+    st.markdown("### 🎯 Output Configuration")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        target_table = st.text_input(
+            "Target Table (catalog.schema.table)",
+            placeholder="eg: dq_results.prod.patient_rules",
+            key="target_table_input"
+        )
+
+    with col2:
+        quarantine_table = st.text_input(
+            "Quarantine Table (catalog.schema.table)",
+            placeholder="eg: dq_quarantine.prod.patient_quarantine",
+            key="quarantine_table_input"
+        )
+
+    # ================= SAVE APPLIED RULES =================
+    if st.button("Save Applied Rules", key="btn_save_applied_rules"):
+        try:
+            if not target_table or not quarantine_table:
+                st.warning("Please provide both Target and Quarantine table details.")
+            else:
+                grid_df = st.session_state.get("selected_rules")
+
+                if grid_df is None or grid_df.empty:
+                    st.warning("No rules available to save.")
+                else:
+                    grid_df = grid_df.copy()
+
+                    # UI → backend format
+                    if "allowed" in grid_df.columns:
+                        grid_df["allowed"] = grid_df["allowed"].apply(string_to_list)
+
+                    if "columns" in grid_df.columns:
+                        grid_df["columns"] = grid_df["columns"].apply(string_to_list)
+
+                    if "rule_index" in grid_df.columns:
+                        grid_df["rule_index"] = (
+                            pd.to_numeric(grid_df["rule_index"], errors="coerce")
+                            .fillna(0)
+                            .astype(int)
+                        )
+
+                    # grid_df = grid_df.drop(["rule_index"], axis=1)
+                    grid_df = grid_df.fillna('NOT TO BE INCLUDED')
+
+                    rename_map = {
+                            "check!#!function": "function",
+                            "check!#!arguments!#!column": "column",
+                            "check!#!arguments!#!columns": "columns",
+                            "check!#!arguments!#!regex": "regex",
+                            "check!#!arguments!#!expression": "expression",
+                            "check!#!arguments!#!allowed": "allowed",
+                            "check!#!arguments!#!min_limit": "min_limit",
+                            "check!#!arguments!#!max_limit": "max_limit",
+                            "check!#!arguments!#!case_sensitive": "case_sensitive",
+                        }
+
+                    grid_df = apply_safe_column_mapping(grid_df, rename_map)
+
+                    # Convert DF → JSON
+                    ui_rules_json = unflatten_df_to_json(grid_df, '!#!')
+
+                    # Split target & quarantine tables
+                    op_catalog, op_schema, op_table = target_table.split(".")
+                    qt_catalog, qt_schema, qt_table = quarantine_table.split(".")
+
+                    # Call your insert function
+                    result = insert_or_update_metadata(
+                        ip_catalog=st.session_state["selected_catalog"],
+                        ip_schema=st.session_state["selected_schema"],
+                        ip_table=st.session_state["selected_table"],
+                        op_catalog=op_catalog,
+                        op_schema=op_schema,
+                        op_table=op_table,
+                        qt_catalog=qt_catalog,
+                        qt_schema=qt_schema,
+                        qt_table=qt_table,
+                        op_check_meta_data_func=st.session_state["metadata_check_result"],
+                        ui_rules_json=ui_rules_json
+                    )
+                    
+                    if result['status'] == 'success':
+                        st.success("Applied rules saved successfully.")
+                    else:
+                        st.error(f"Failed to save applied rules: {result['message']}")
+
+        except ValueError:
+            st.error("Please enter table names in catalog.schema.table format.")
+        except Exception as e:
+            st.error(f"Failed to save applied rules: {e}")
+    # =============================================================
+
