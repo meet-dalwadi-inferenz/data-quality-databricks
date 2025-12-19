@@ -195,7 +195,22 @@ def rules_json_to_dataframe(rules_json):
 
     df = pd.json_normalize(list(rules_map.values()), sep='!#!')
 
-    rename_col_map = {col: col.split('!#!')[-1] for col in df.columns}
+    # rename_col_map = {col: col.split('!#!')[-1] for col in df.columns}
+    rename_col_map = {
+            "criticality": "criticality",
+            "message": "message",
+            "filter": "filter",
+            "check!#!function": "function",
+            "check!#!arguments!#!column": "column",
+            "check!#!arguments!#!columns": "columns",
+            "check!#!arguments!#!regex": "regex",
+            "check!#!arguments!#!allowed": "allowed",
+            "check!#!arguments!#!min_limit": "min_limit",
+            "check!#!arguments!#!max_limit": "max_limit",
+            "check!#!arguments!#!expression": "expression",
+            "check!#!arguments!#!trim_strings": "trim_strings",
+            "check!#!arguments!#!case_sensitive": "case_sensitive",
+        }
     st.session_state.rename_col_map = rename_col_map
 
     df = df.rename(columns=rename_col_map)
@@ -229,9 +244,12 @@ def load_rules_for_selected_table():
 
 
 def save_columns_with_list_values(rules_df):
-        list_columns = [
-            col
-            for col in rules_df.columns
-            if rules_df[col].apply(lambda v: isinstance(v, list)).any()
-        ]
-        st.session_state.columns_with_list_values = list_columns
+    existing_cols = set(st.session_state.get("columns_with_list_values", []))
+
+    new_cols = {
+        col
+        for col in rules_df.columns
+        if rules_df[col].apply(lambda v: isinstance(v, list)).any()
+    }
+
+    st.session_state.columns_with_list_values = list(existing_cols.union(new_cols))

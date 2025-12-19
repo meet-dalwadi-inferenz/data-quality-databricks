@@ -28,6 +28,7 @@ dq_schema = StructType([
     StructField("quarantine_schema_name", StringType(), True),
     StructField("quarantine_table_name", StringType(), True),
     StructField("input_table_column_list", ArrayType(StringType()), True),
+    StructField("selected_column_list", ArrayType(StringType()), True),
     StructField("validation_rules", StringType(), True),
     StructField("inserted_at", TimestampType(), True),
     StructField("inserted_by", StringType(), True),
@@ -92,13 +93,14 @@ def get_idx_json(ai_checks):
     # match your required structure: list with one dict
     return [indexed_rules]
 
-def check_metadata_for_table(ip_catalog,ip_schema,ip_table):
+def check_metadata_for_table(ip_catalog,ip_schema,ip_table, column_list_ui):
     result = {}
 
     df_current = spark.sql(f"describe table {ip_catalog}.{ip_schema}.{ip_table}").select("col_name")
     current_cols = [row.col_name for row in df_current.collect()]
 
     result["current_columns"] = current_cols
+    result["current_selected_columns"] = column_list_ui
     
     metadata_fetch_query = f"""
         SELECT *
@@ -161,6 +163,7 @@ def insert_or_update_metadata(ip_catalog, ip_schema, ip_table, op_catalog, op_sc
             "quarantine_table_name": qt_table,
 
             "input_table_column_list": op_check_meta_data_func["current_columns"],
+            "selected_column_list": op_check_meta_data_func.get("current_selected_columns",[]),
             "validation_rules": ui_rules_json_str,
 
             "inserted_at": None,
@@ -176,7 +179,7 @@ def insert_or_update_metadata(ip_catalog, ip_schema, ip_table, op_catalog, op_sc
         try:
             df_insert.write.mode("append").insertInto("data_quality.admin.dq_table_metadata_temp")
         except Exception as e:
-            return {"status" : "failed", "error" : str(e) }  
+            return {"status" : "failed", "message" : str(e) }  
 
         return {"message" : "inserted", "status" : "success" }
     
@@ -197,6 +200,7 @@ def insert_or_update_metadata(ip_catalog, ip_schema, ip_table, op_catalog, op_sc
             .withColumn("quarantine_schema_name", lit(qt_schema))
             .withColumn("quarantine_table_name", lit(qt_table))
             .withColumn("input_table_column_list", lit(op_check_meta_data_func['current_columns']))
+            .withColumn("selected_column_list", lit(op_check_meta_data_func['current_selected_columns']))
             .withColumn("validation_rules", lit(ui_rules_json_str))
             .withColumn("updated_at", current_timestamp())
             .withColumn("updated_by", current_user())
@@ -204,12 +208,16 @@ def insert_or_update_metadata(ip_catalog, ip_schema, ip_table, op_catalog, op_sc
 
         df_update.createOrReplaceTempView("update_temp")
 
-        spark.sql("""
-            MERGE INTO data_quality.admin.dq_table_metadata_temp AS target
-            USING update_temp AS source
-            ON target.dq_checks_id = source.dq_checks_id
-            WHEN MATCHED THEN UPDATE SET *
-        """)
+        try:
+
+            spark.sql("""
+                MERGE INTO data_quality.admin.dq_table_metadata_temp AS target
+                USING update_temp AS source
+                ON target.dq_checks_id = source.dq_checks_id
+                WHEN MATCHED THEN UPDATE SET *
+            """)
+        except Exception as e:
+            return {"status" : "failed", "message" : str(e) }
 
         return {"message" : "updated", "status" : "success" }
     
@@ -249,13 +257,13 @@ def generate_checks_for_input_columns(ip_catalog,ip_schema,ip_table,ip_column_li
         tmp_catalog = ip_catalog
         tmp_schema = ip_schema
         tmp_table = f'tmp_{ip_table}_dqx_selected_cols_{uuid.uuid4().hex[:8]}'
-       
 
         # write as a managed/catalog table (overwrite if exists)
         generate_only_for_columns_df.write.mode("overwrite").saveAsTable(f'{tmp_catalog}.{tmp_schema}.{tmp_table}')
         print("Written temp catalog table:", tmp_table)
     
         generated_checks = generate_checks(tmp_catalog,tmp_schema,tmp_table,llm_model_name,ip_promt)
+        spark.sql(f"drop table tmp_{ip_table}_dqx_selected_cols_{uuid.uuid4().hex[:8]}")
         return generated_checks
     
     except PySparkException as ex:

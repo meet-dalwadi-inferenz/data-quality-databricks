@@ -35,7 +35,12 @@ def reorder_rule_columns(df):
 
     # Final desired order
     return df[existing_preferred + remaining_columns]
-  
+
+def get_all_check_rules():
+    all_check_rules = ["is_not_null_and_not_empty", "is_not_empty", "is_not_null", "is_in_list", "sql_expression", "is_not_in_future","is_in_range", "regex_match", "is_unique", "is_valid_date", "is_not_less_than", "is_not_greater_than"]
+    
+    return all_check_rules
+
 def unified_column(df):
 
     if "columns" in df.columns:
@@ -88,7 +93,6 @@ def convert_df_suitable_for_json(df,rename_col_map):
     df = df.copy()
     na_replace_value = "NOT TO BE INCLUDED"
 
-    df.drop(columns=["rule_index"], inplace=True)
     df = df.where(df.notna(), na_replace_value)
 
     reversed_rename_col_map = {v: k for k, v in rename_col_map.items()}
@@ -99,3 +103,32 @@ def convert_df_suitable_for_json(df,rename_col_map):
 def has_invalid_values(df: pd.DataFrame) -> bool:
     INVALID_SENTINEL = "__EMPTY__"
     return (df == INVALID_SENTINEL).any().any()
+
+
+def archive_rules_for_removed_columns(rules_df, removed_columns):
+    if rules_df is None or rules_df.empty or not removed_columns:
+        return rules_df, pd.DataFrame()
+
+    removed_set = set(removed_columns)
+
+    def is_rule_invalid(row):
+        # single-column rule
+        if pd.notna(row.get("column")):
+            return row["column"] in removed_set
+
+        # multi-column rule (list in "columns" col)
+        if isinstance(row.get("columns"), list):
+            # OPTION A: remove rule if it touches ANY removed column
+            return any(col in removed_set for col in row["columns"])
+
+            # OPTION B (alternative): only if ALL of them are removed
+            # return all(col in removed_set for col in row["columns"])
+
+        return False
+
+    mask_invalid = rules_df.apply(is_rule_invalid, axis=1)
+
+    archived_df = rules_df[mask_invalid].copy()
+    active_df = rules_df[~mask_invalid].copy()
+
+    return active_df.reset_index(drop=True), archived_df.reset_index(drop=True)
