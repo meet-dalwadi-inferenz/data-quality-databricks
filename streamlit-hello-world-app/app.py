@@ -381,11 +381,6 @@ if st.session_state.get("submitted", False):
     else:
         st.subheader("Selected Rules")
 
-        if "columns_with_list_values" in st.session_state:
-            for col in st.session_state.columns_with_list_values:
-                if col in selected_rules_combined.columns:
-                    selected_rules_combined[col] = selected_rules_combined[col].apply(string_to_list)
-
         st.success(f"{len(selected_rules_combined)} rules selected for processing.")
         selected_rules_combined = selected_rules_combined.drop(columns=["rule_index"])
         st.dataframe(selected_rules_combined)
@@ -613,7 +608,7 @@ if st.session_state.get("submitted", False):
                 st.warning(msg)
 
         else:
-
+            #work: if is_unique function then put this into the COLUMNS rather than the column
             new_row = {
                 "rule_index": next_idx,
                 "criticality": new_criticality,
